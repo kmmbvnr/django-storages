@@ -1,10 +1,12 @@
+import math
+import mimetypes
 import os
 import posixpath
-import mimetypes
+import warnings
+
 from datetime import datetime
 from gzip import GzipFile
 from tempfile import SpooledTemporaryFile
-import warnings
 
 from django.core.files.base import File
 from django.core.files.storage import Storage
@@ -418,14 +420,23 @@ class S3BotoStorage(Storage):
         return cleaned_name
 
     def _save_content(self, key, content, headers):
-        # only pass backwards incompatible arguments if they vary from the default
-        kwargs = {}
-        if self.encryption:
-            kwargs['encrypt_key'] = self.encryption
-        key.set_contents_from_file(content, headers=headers,
-                                   policy=self.default_acl,
-                                   reduced_redundancy=self.reduced_redundancy,
-                                   rewind=True, **kwargs)
+        """
+        http://codeinpython.blogspot.ru/2015/08/s3-upload-large-files-to-amazon-using.html
+        """
+        upload = self.bucket.initiate_multipart_upload(key.key)
+
+        source_size = content.size
+        bytes_per_chunk = 500*1024*1024
+        chunks_count = int(math.ceil(source_size / float(bytes_per_chunk)))
+
+        for i in range(chunks_count):
+            offset = i * bytes_per_chunk
+            remaining_bytes = source_size - offset
+            upload_bytes = min([bytes_per_chunk, remaining_bytes])
+            part_num = i + 1
+            content.seek(offset)
+            upload.upload_part_from_file(fp=content, part_num=part_num, size=upload_bytes)
+        upload.complete_upload()
 
     def delete(self, name):
         name = self._normalize_name(self._clean_name(name))
